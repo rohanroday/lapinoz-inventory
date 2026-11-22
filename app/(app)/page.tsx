@@ -1,7 +1,8 @@
 import StockBoard from "@/components/StockBoard";
 import { requirePageUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { listItems } from "@/lib/stock";
+import { todayIST } from "@/lib/day";
+import { getDayReport, listItems } from "@/lib/stock";
 
 function greeting() {
   const hour = Number(new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", hourCycle: "h23" }).format(new Date()));
@@ -11,7 +12,12 @@ function greeting() {
 export default async function StockPage() {
   const user = await requirePageUser();
   const db = await getDb();
-  const [items, people] = await Promise.all([listItems(), db.collection("movements").distinct("personName")]);
+  const today = todayIST();
+  const [items, people, dayReport] = await Promise.all([
+    listItems(),
+    db.collection("movements").distinct("personName"),
+    user.role === "owner" ? getDayReport(today) : Promise.resolve(null),
+  ]);
   return (
     <StockBoard
       items={items}
@@ -20,6 +26,8 @@ export default async function StockPage() {
       defaultName={user.role === "owner" ? user.name : ""}
       greeting={greeting()}
       userName={user.name}
+      dayReport={dayReport}
+      today={today}
     />
   );
 }

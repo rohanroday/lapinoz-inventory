@@ -2,6 +2,7 @@ import { ObjectId, type Document } from "mongodb";
 import nodemailer from "nodemailer";
 import { HttpError, type SessionUser } from "./auth";
 import { getDb } from "./db";
+import { isValidDay, shiftDay, todayIST, type DayReportData } from "./day";
 import { fmt, fromMilli, qtyError, toMilli, type Item } from "./qty";
 
 // Deleted items stay hidden instead of erased, so Undo works and startup seeding cannot bring them back.
@@ -70,7 +71,10 @@ type MovementInput = {
   requestId?: unknown;
 };
 
-export async function recordMovement(input: MovementInput, user: SessionUser) {
+type LowRow = { name: string; uom: string; stock: number; min: number };
+type MovementResult = { duplicate?: boolean; changeMilli?: number; stock?: number | null; low?: LowRow };
+
+export async function recordMovement(input: MovementInput, user: SessionUser, options: { silent?: boolean } = {}): Promise<MovementResult> {
   const db = await getDb();
   const items = db.collection("items");
   const movements = db.collection("movements");
@@ -84,7 +88,10 @@ export async function recordMovement(input: MovementInput, user: SessionUser) {
   const requestId = typeof input.requestId === "string" ? input.requestId.slice(0, 64) : undefined;
 
   // A double tap or retry must not move stock twice.
-  if (requestId && (await movements.findOne({ requestId }))) return { duplicate: true };
+  if (requestId) {
+    const existing = await movements.findOne({ requestId });
+    if (existing) return { duplicate: true, changeMilli: existing.changeMilli };
+  }
 
   const _id = objectId(input.itemId);
   const item = await items.findOne({ _id, ...ACTIVE });
@@ -149,9 +156,82 @@ export async function recordMovement(input: MovementInput, user: SessionUser) {
   }
 
   if (crossedLow(before, after, item.minMilli)) {
-    await notifyLow([{ name: item.name, uom: item.uom, stock: after, min: item.minMilli }], personName);
+    const low = { name: item.name, uom: item.uom, stock: after, min: item.minMilli };
+    if (options.silent) return { stock: fromMilli(after), low };
+    await notifyLow([low], personName);
   }
   return { stock: fromMilli(after) };
+}
+
+// Each item saves on its own, so one failed item never blocks or rolls back the others.
+export async function saveBatch(body: Record<string, any>, user: SessionUser) {
+  const personName = cleanPerson(body.personName);
+  const batchId = typeof body.batchId === "string" && /^[0-9a-f-]{36}$/i.test(body.batchId) ? body.batchId : null;
+  if (!batchId) throw new HttpError(400, "Invalid request");
+  if (!Array.isArray(body.changes) || !body.changes.length || body.changes.length > 300) {
+    throw new HttpError(400, "Change at least one item");
+  }
+  const changes = body.changes as { itemId: unknown; delta: unknown }[];
+  if (new Set(changes.map((c) => String(c.itemId))).size !== changes.length) throw new HttpError(400, "An item was repeated");
+  for (const change of changes) {
+    objectId(change.itemId);
+    if (typeof change.delta !== "number" || !Number.isFinite(change.delta) || change.delta === 0) {
+      throw new HttpError(400, "Each change needs a quantity");
+    }
+  }
+
+  const failed: { itemId: string; error: string }[] = [];
+  const lowRows: LowRow[] = [];
+  let saved = 0;
+  for (let i = 0; i < changes.length; i += 10) {
+    await Promise.all(changes.slice(i, i + 10).map(async ({ itemId, delta }) => {
+      const amount = delta as number;
+      try {
+        const result = await recordMovement(
+          { itemId, type: amount > 0 ? "in" : "out", qty: Math.abs(amount), personName, requestId: `${batchId}:${itemId}` },
+          user,
+          { silent: true },
+        );
+        if (result.duplicate && result.changeMilli !== undefined && result.changeMilli !== toMilli(amount)) {
+          failed.push({ itemId: String(itemId), error: `Already saved as ${fmt(result.changeMilli / 1000)}. Check the stock.` });
+          return;
+        }
+        saved += 1;
+        if (result.low) lowRows.push(result.low);
+      } catch (error) {
+        if (!(error instanceof HttpError)) console.error(error);
+        failed.push({ itemId: String(itemId), error: error instanceof HttpError ? error.message : "Could not save" });
+      }
+    }));
+  }
+  if (lowRows.length) await notifyLow(lowRows, personName);
+  return { saved, failed };
+}
+
+export async function getDayReport(day: unknown): Promise<DayReportData> {
+  if (!isValidDay(day)) throw new HttpError(400, "Choose a valid date");
+  if (day > todayIST()) throw new HttpError(400, "Future dates have no usage");
+  const db = await getDb();
+  const rows = await db.collection("movements")
+    .find({ type: "out", at: { $gte: new Date(`${day}T00:00:00+05:30`), $lt: new Date(`${shiftDay(day, 1)}T00:00:00+05:30`) } })
+    .sort({ at: 1, _id: 1 })
+    .toArray();
+
+  const byItem = new Map<string, DayReportData["items"][number] & { usedMilli: number }>();
+  for (const row of rows) {
+    const key = String(row.itemId);
+    const entry: DayReportData["items"][number] & { usedMilli: number } =
+      byItem.get(key) ?? { itemId: key, name: row.itemName, category: row.category, uom: row.uom, used: 0, usedMilli: 0, uses: [] };
+    const milli = Math.abs(row.changeMilli);
+    entry.usedMilli += milli;
+    entry.used = entry.usedMilli / 1000;
+    entry.uses.push({ person: row.personName, qty: milli / 1000, at: row.at.toISOString(), note: row.note ?? "" });
+    byItem.set(key, entry);
+  }
+  const items = [...byItem.values()]
+    .map(({ usedMilli: _usedMilli, ...item }) => item)
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  return { date: day, entries: rows.length, people: [...new Set(rows.map((r) => r.personName as string))].sort(), items };
 }
 
 export async function saveOpening(body: Record<string, any>, user: SessionUser) {

@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Check, ChevronRight, ClipboardList, History, Minus, PackagePlus, Plus, Search, Trash2, X } from "lucide-react";
+import DayReport from "@/components/DayReport";
 import NameDialog from "@/components/NameDialog";
 import { CategoryTile, prettyCategory } from "@/lib/categories";
-import { bringQty, fmt, qtyError, UOMS, type Item } from "@/lib/qty";
+import type { DayReportData } from "@/lib/day";
+import { bringQty, fmt, qtyError, toMilli, UOMS, type Item } from "@/lib/qty";
 
 type Filter = "all" | "low" | "pending" | "ok";
 type Mode = "out" | "in" | "adjust" | "min";
@@ -22,9 +24,20 @@ const postJson = async (url: string, method: string, body: unknown) => {
 
 const newId = () => crypto.randomUUID();
 
-type Props = { items: Item[]; role: string; people: string[]; defaultName: string; greeting: string; userName: string };
+type Props = {
+  items: Item[];
+  role: string;
+  people: string[];
+  defaultName: string;
+  greeting: string;
+  userName: string;
+  dayReport: DayReportData | null;
+  today: string;
+};
 
-export default function StockBoard({ items, role, people, defaultName, greeting, userName }: Props) {
+const signed = (milli: number) => `${milli > 0 ? "+" : ""}${fmt(milli / 1000)}`;
+
+export default function StockBoard({ items, role, people, defaultName, greeting, userName, dayReport, today }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const isOwner = role === "owner";
@@ -39,8 +52,66 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [undoIds, setUndoIds] = useState<string[]>([]);
+  // Unsaved +/- changes per item, in thousandths so KG values stay exact.
+  const [changes, setChanges] = useState<Record<string, number>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [typing, setTyping] = useState<Item | null>(null);
+  const [askingSave, setAskingSave] = useState(false);
+  const [savingChanges, setSavingChanges] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const batchId = useRef("");
+  const draftKey = `inventory_stock_changes_${role}`;
   const categories = useMemo(() => [...new Set(items.map((item) => item.category))], [items]);
   const selectedItem = items.find((item) => item.id === selected?.id) ?? null;
+  const changedItems = items.filter((item) => changes[item.id]);
+  const addedCount = changedItems.filter((item) => changes[item.id] > 0).length;
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey) ?? "{}");
+      if (saved.changes && typeof saved.changes === "object") setChanges(saved.changes);
+      if (typeof saved.batchId === "string") batchId.current = saved.batchId;
+    } catch {}
+    setDraftLoaded(true);
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+    try { localStorage.setItem(draftKey, JSON.stringify({ batchId: batchId.current, changes })); } catch {}
+  }, [changes, draftKey, draftLoaded]);
+
+  const setChange = (id: string, milli: number) => {
+    setRowErrors(({ [id]: _cleared, ...rest }) => rest);
+    setChanges(({ [id]: _old, ...rest }) => (milli === 0 ? rest : { ...rest, [id]: milli }));
+  };
+  const stepItem = (item: Item, direction: 1 | -1) => {
+    const next = (changes[item.id] ?? 0) + direction * 1000;
+    if (toMilli(item.stock ?? 0) + next >= 0) setChange(item.id, next);
+  };
+
+  async function saveChanges(personName: string) {
+    const list = changedItems.map((item) => ({ itemId: item.id, delta: changes[item.id] / 1000 }));
+    if (!batchId.current) batchId.current = newId();
+    try { localStorage.setItem(draftKey, JSON.stringify({ batchId: batchId.current, changes })); } catch {}
+    setSavingChanges(true);
+    setSaveError("");
+    try {
+      const data: { saved: number; failed: { itemId: string; error: string }[] } =
+        await postJson("/api/movements/batch", "POST", { batchId: batchId.current, personName, changes: list });
+      const failed = new Map(data.failed.map((f) => [f.itemId, f.error]));
+      batchId.current = "";
+      setChanges((current) => Object.fromEntries(Object.entries(current).filter(([id]) => failed.has(id))));
+      setRowErrors(Object.fromEntries(failed));
+      say(data.saved ? `Saved ${data.saved} ${data.saved === 1 ? "item" : "items"} by ${personName}.` : "");
+      if (failed.size) setSaveError(`${failed.size} ${failed.size === 1 ? "item was" : "items were"} not saved. Check the red notes.`);
+      router.refresh();
+    } catch (e) {
+      setSaveError(`${e instanceof Error ? e.message : "Could not save"}. Your changes are still here.`);
+    }
+    setAskingSave(false);
+    setSavingChanges(false);
+  }
 
   const say = (text: string) => { setMessage(text); setUndoIds([]); };
   // Uses browser history so the phone's back button returns to the boxes.
@@ -129,8 +200,36 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
     );
   };
 
+  const renderStepRow = (item: Item) => {
+    const change = changes[item.id] ?? 0;
+    const base = toMilli(item.stock ?? 0);
+    const result = base + change;
+    return (
+      <div className={`step-row ${change ? "changed" : ""}`} key={item.id}>
+        <button className="step-info" onClick={() => { say(""); setSelected({ id: item.id, mode: change < 0 ? "out" : "in" }); }}>
+          <span className="name">{item.name}</span>
+          <span className={`meta ${item.low ? "meta-low" : ""}`}>
+            {item.stock === null && !change ? "Not counted" : `${fmt(base / 1000)}`}
+            {change !== 0 && <> → <b>{fmt(result / 1000)}</b></>} {item.uom}
+            {item.low && !change ? " · Low" : ""}
+          </span>
+          {rowErrors[item.id] && <span className="row-error">{rowErrors[item.id]}</span>}
+        </button>
+        <div className="stepper" role="group" aria-label={`Change ${item.name}`}>
+          <button aria-label={`Take out 1 ${item.uom} of ${item.name}`} disabled={result < 1000} onClick={() => stepItem(item, -1)}><Minus size={18} /></button>
+          <button className={`step-value ${change > 0 ? "plus" : change < 0 ? "minus" : ""}`} aria-label={`Type quantity for ${item.name}, current change ${signed(change)}`} onClick={() => setTyping(item)}>
+            {change ? signed(change) : "0"}
+          </button>
+          <button aria-label={`Add 1 ${item.uom} of ${item.name}`} onClick={() => stepItem(item, 1)}><Plus size={18} /></button>
+        </div>
+      </div>
+    );
+  };
+
+  const showChangeBar = changedItems.length > 0 && !selecting;
+
   return (
-    <div className={selecting ? "has-savebar" : ""}>
+    <div className={selecting || showChangeBar ? "has-savebar" : ""}>
       <div className="head">
         <div>
           <p className="greet">{greeting},</p>
@@ -206,6 +305,8 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               )}
             </section>
           )}
+
+          {isOwner && dayReport && <DayReport initial={dayReport} today={today} />}
         </>
       )}
 
@@ -253,6 +354,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               <h2>{prettyCategory(category)}</h2>
             </div>
           )}
+          {category && !selecting && <p className="step-hint">Tap − or + to change stock, or tap the number to type it. Then press Save.</p>}
           {isOwner && (
             <div className="tools">
               {selecting ? (
@@ -282,7 +384,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
             <section key={group}>
               {!category && <h2>{prettyCategory(group)}</h2>}
               <div className="list" style={category ? { marginTop: 4 } : undefined}>
-                {visible.filter((item) => item.category === group).map(renderRow)}
+                {visible.filter((item) => item.category === group).map(category && !selecting ? renderStepRow : renderRow)}
               </div>
             </section>
           ))}
@@ -299,6 +401,31 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
             }}><Trash2 size={17} /> Delete</button>
           </div>
         </div>
+      )}
+
+      {showChangeBar && (
+        <div className="savebar">
+          {saveError && <p className="error" role="alert" style={{ maxWidth: 1088, margin: "0 auto 8px" }}>{saveError}</p>}
+          <div>
+            <span>{changedItems.length} {changedItems.length === 1 ? "item" : "items"} changed</span>
+            <span className="bar-actions">
+              <button className="btn" onClick={() => { setChanges({}); setRowErrors({}); setSaveError(""); batchId.current = ""; }}>Clear</button>
+              <button className="btn primary" disabled={savingChanges} onClick={() => { setSaveError(""); setAskingSave(true); }}>{savingChanges ? "Saving..." : "Save"}</button>
+            </span>
+          </div>
+        </div>
+      )}
+      {!showChangeBar && saveError && <p className="error" role="alert" style={{ marginTop: 12 }}>{saveError}</p>}
+      {askingSave && (
+        <NameDialog
+          summary={`${addedCount} added, ${changedItems.length - addedCount} taken out`}
+          people={people} initial={defaultName} busy={savingChanges}
+          onConfirm={saveChanges} onCancel={() => setAskingSave(false)} />
+      )}
+      {typing && (
+        <TypeChange item={typing} current={changes[typing.id] ?? 0}
+          onApply={(milli) => { setChange(typing.id, milli); setTyping(null); }}
+          onClose={() => setTyping(null)} />
       )}
 
       {picking && (
@@ -320,6 +447,47 @@ function useModal() {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { ref.current?.showModal(); }, []);
   return ref;
+}
+
+function TypeChange({ item, current, onApply, onClose }: { item: Item; current: number; onApply: (milli: number) => void; onClose: () => void }) {
+  const ref = useModal();
+  const [direction, setDirection] = useState<"in" | "out">(current < 0 ? "out" : "in");
+  const [qty, setQty] = useState(current ? String(Math.abs(current) / 1000) : "");
+  const [error, setError] = useState("");
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const problem = qtyError(qty, item.uom);
+    if (problem) return setError(problem);
+    const milli = toMilli(qty);
+    const stock = toMilli(item.stock ?? 0);
+    if (direction === "out" && milli > stock) return setError(`Only ${fmt(stock / 1000)} ${item.uom} in stock`);
+    onApply(direction === "out" ? -milli : milli);
+  }
+
+  return (
+    <dialog ref={ref} onClose={onClose} aria-label={`Type quantity for ${item.name}`}>
+      <form className="form" onSubmit={submit}>
+        <div>
+          <h1 style={{ fontSize: 18 }}>{item.name}</h1>
+          <p className="sub">In stock: <b>{item.stock === null ? "Not counted" : `${fmt(item.stock)} ${item.uom}`}</b></p>
+        </div>
+        <div className="seg">
+          <button type="button" className={direction === "out" ? "on" : ""} aria-pressed={direction === "out"} onClick={() => { setDirection("out"); setError(""); }}>Take out</button>
+          <button type="button" className={direction === "in" ? "on" : ""} aria-pressed={direction === "in"} onClick={() => { setDirection("in"); setError(""); }}>Add</button>
+        </div>
+        <label>Quantity ({item.uom})
+          <input autoFocus inputMode={item.uom === "KG" ? "decimal" : "numeric"} value={qty} onChange={(e) => { setQty(e.target.value); setError(""); }} />
+        </label>
+        {error && <p className="error" role="alert">{error}</p>}
+        <div className="actions">
+          <button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button>
+          <button className="btn primary">Done</button>
+        </div>
+      </form>
+    </dialog>
+  );
 }
 
 function ConfirmDelete({ info, onConfirm, onClose }: { info: PendingDelete; onConfirm: () => Promise<void>; onClose: () => void }) {
