@@ -26,6 +26,8 @@ async function init() {
     db.collection("users").createIndex({ email: 1 }, { unique: true }),
     db.collection("movements").createIndex({ requestId: 1 }, { unique: true, sparse: true }),
     db.collection("movements").createIndex({ at: -1 }),
+    // One open request per item, so a double tap or a second person cannot duplicate it.
+    db.collection("requests").createIndex({ itemId: 1 }, { unique: true, partialFilterExpression: { status: "open" } }),
     db.collection("loginAttempts").createIndex({ at: 1 }, { expireAfterSeconds: 900 }),
   ]);
 

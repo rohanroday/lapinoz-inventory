@@ -12,6 +12,18 @@ export type Item = {
   low: boolean;
 };
 
+export type StockRequest = {
+  id: string;
+  itemId: string;
+  name: string;
+  category: string;
+  uom: string;
+  qty: number | null;
+  note: string;
+  person: string;
+  at: string;
+};
+
 export function qtyError(value: unknown, uom: string): string | null {
   if (value === "" || value === null || value === undefined) return "Enter a quantity";
   const n = Number(value);

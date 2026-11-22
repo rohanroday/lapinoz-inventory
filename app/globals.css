@@ -178,10 +178,26 @@ dialog::backdrop { background: rgba(9, 40, 30, .48); }
 
 /* Category +/- */
 .step-hint { margin: -2px 0 12px; color: var(--muted); font-size: 13px; }
-.step-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 14px; border-top: 1px solid var(--line); transition: background .15s; }
+.step-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 10px 10px 14px; border-top: 1px solid var(--line); transition: background .15s; }
 .step-row:first-child { border-top: 0; }
 .step-row.changed { background: #f1faf6; }
-.step-info { flex: 1; min-width: 0; padding: 3px 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.step-info { flex: 1 1 120px; min-width: 0; padding: 3px 0; text-align: left; }
+.step-actions { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 7px; }
+.mini-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 0 12px; border: 1px solid var(--field); border-radius: 999px; background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 700; cursor: pointer; transition: background .15s, transform .15s var(--ease); touch-action: manipulation; }
+.mini-btn:hover { background: var(--soft); }
+button.mini-btn:active { transform: scale(.97); }
+.mini-btn:disabled { opacity: .5; cursor: default; }
+.mini-btn.accent { border-color: #e9c98a; background: var(--amber-soft); color: var(--amber); }
+.mini-btn.accent:hover { background: #fbe8bd; }
+.mini-btn.solid { border-color: var(--brand); background: var(--brand); color: #fff; }
+.mini-btn.solid:hover { background: #096a45; }
+.mini-btn.requested { border-color: transparent; background: var(--brand-soft); color: #075f3e; cursor: default; }
+.mini-btn.requested:hover { background: var(--brand-soft); }
+.req-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.req-row:first-child { border-top: 0; }
+.req-row .row-main { flex: 1 1 130px; }
+.req-row .meta b { color: var(--ink); }
+.req-actions { flex: 1 0 100%; display: flex; justify-content: flex-end; gap: 7px; }
 .step-info .meta b { color: var(--ink); }
 .meta-low { color: var(--red); font-weight: 600; }
 .row-error { display: block; margin-top: 2px; color: var(--red); font-size: 12px; font-weight: 600; }

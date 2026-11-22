@@ -38,7 +38,7 @@ export default function NameDialog({ summary, people, initial = "", busy, onConf
         </label>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
-          <button type="button" className="btn" onClick={() => ref.current?.close()}>Back</button>
+          <button type="button" className="btn" onClick={onCancel}>Back</button>
           <button className="btn primary" disabled={busy}>{busy ? "Saving..." : "Confirm and save"}</button>
         </div>
       </form>

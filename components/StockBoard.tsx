@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Check, ChevronRight, ClipboardList, History, Minus, PackagePlus, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, Check, ChevronRight, ClipboardList, History, Minus, PackagePlus, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import DayReport from "@/components/DayReport";
 import NameDialog from "@/components/NameDialog";
+import { RequestDialog, RequestsPanel } from "@/components/Requests";
 import { CategoryTile, prettyCategory } from "@/lib/categories";
 import type { DayReportData } from "@/lib/day";
-import { bringQty, fmt, qtyError, toMilli, UOMS, type Item } from "@/lib/qty";
+import { bringQty, fmt, qtyError, toMilli, UOMS, type Item, type StockRequest } from "@/lib/qty";
 
 type Filter = "all" | "low" | "pending" | "ok";
 type Mode = "out" | "in" | "adjust" | "min";
@@ -33,18 +34,20 @@ type Props = {
   userName: string;
   dayReport: DayReportData | null;
   today: string;
+  requests: StockRequest[];
 };
 
 const signed = (milli: number) => `${milli > 0 ? "+" : ""}${fmt(milli / 1000)}`;
 
-export default function StockBoard({ items, role, people, defaultName, greeting, userName, dayReport, today }: Props) {
+export default function StockBoard({ items, role, people, defaultName, greeting, userName, dayReport, today, requests }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const isOwner = role === "owner";
   const category = params.get("cat") ?? "";
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [selected, setSelected] = useState<{ id: string; mode: Mode } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; mode: Mode; qty?: string } | null>(null);
+  const [requesting, setRequesting] = useState<Item | null>(null);
   const [picking, setPicking] = useState<"out" | "in" | null>(null);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState("");
@@ -204,9 +207,10 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
     const change = changes[item.id] ?? 0;
     const base = toMilli(item.stock ?? 0);
     const result = base + change;
+    const request = requests.find((r) => r.itemId === item.id);
     return (
       <div className={`step-row ${change ? "changed" : ""}`} key={item.id}>
-        <button className="step-info" onClick={() => { say(""); setSelected({ id: item.id, mode: change < 0 ? "out" : "in" }); }}>
+        <div className="step-info">
           <span className="name">{item.name}</span>
           <span className={`meta ${item.low ? "meta-low" : ""}`}>
             {change !== 0
@@ -214,7 +218,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               : item.stock === null ? `Not counted · ${item.uom}` : `${item.uom}${item.low ? " · Low" : ""}`}
           </span>
           {rowErrors[item.id] && <span className="row-error">{rowErrors[item.id]}</span>}
-        </button>
+        </div>
         <div className="stepper" role="group" aria-label={`Change ${item.name}`}>
           <button aria-label={`Take out 1 ${item.uom} of ${item.name}`} disabled={result < 1000} onClick={() => stepItem(item, -1)}><Minus size={18} /></button>
           <button className={`step-value ${change > 0 ? "plus" : change < 0 ? "minus" : ""}`} aria-label={`${item.name}: ${item.stock === null && !change ? "not counted" : `${fmt(result / 1000)} ${item.uom}`}${change ? `, change ${signed(change)}` : ""}. Type a quantity`} onClick={() => setTyping(item)}>
@@ -222,6 +226,18 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
             {change !== 0 && <small>{signed(change)}</small>}
           </button>
           <button aria-label={`Add 1 ${item.uom} of ${item.name}`} onClick={() => stepItem(item, 1)}><Plus size={18} /></button>
+        </div>
+        <div className="step-actions">
+          <button className="mini-btn" aria-label={`${isOwner ? "Manage" : "Add or take out"} ${item.name}`} onClick={() => { say(""); setSelected({ id: item.id, mode: change < 0 ? "out" : "in" }); }}>
+            <ArrowUpDown size={14} /> {isOwner ? "Manage" : "Add / Take out"}
+          </button>
+          {request ? (
+            <span className="mini-btn requested" title={`Requested by ${request.person}`}><Check size={14} /> Requested{isOwner ? ` by ${request.person}` : ""}</span>
+          ) : !isOwner && (
+            <button className="mini-btn accent" aria-label={`Request ${item.name}`} onClick={() => { say(""); setRequesting(item); }}>
+              <ShoppingCart size={14} /> Request item
+            </button>
+          )}
         </div>
       </div>
     );
@@ -275,6 +291,20 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               ? <button onClick={() => setAdding(true)}><span className="quick-ic"><PackagePlus size={22} /></span>New item</button>
               : <Link href="/history"><span className="quick-ic"><History size={22} /></span>History</Link>}
           </div>
+
+          {isOwner && (
+            <RequestsPanel
+              requests={requests}
+              onBrought={(request) => {
+                say(`Marked ${request.name} as brought. Enter the quantity received to update stock.`);
+                router.refresh();
+                if (items.some((i) => i.id === request.itemId)) {
+                  setSelected({ id: request.itemId, mode: "in", qty: request.qty === null ? "" : String(request.qty) });
+                }
+              }}
+              onDismissed={(request) => { say(`Dismissed the request for ${request.name}.`); router.refresh(); }}
+            />
+          )}
 
           {isOwner && (
             <section aria-label="What to bring">
@@ -355,7 +385,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               <h2>{prettyCategory(category)}</h2>
             </div>
           )}
-          {category && !selecting && <p className="step-hint">The middle number is your stock. Tap − or + to change it, or tap the number to type an amount. Then press Save.</p>}
+          {!selecting && <p className="step-hint">The middle number is your stock. Tap − or + to change it, or tap the number to type an amount. Then press Save.</p>}
           {isOwner && (
             <div className="tools">
               {selecting ? (
@@ -385,7 +415,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
             <section key={group}>
               {!category && <h2>{prettyCategory(group)}</h2>}
               <div className="list" style={category ? { marginTop: 4 } : undefined}>
-                {visible.filter((item) => item.category === group).map(category && !selecting ? renderStepRow : renderRow)}
+                {visible.filter((item) => item.category === group).map(selecting ? renderRow : renderStepRow)}
               </div>
             </section>
           ))}
@@ -435,8 +465,13 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
           onClose={() => setPicking(null)} />
       )}
       {selectedItem && selected && (
-        <ItemDialog key={selectedItem.id} item={selectedItem} initialMode={selected.mode} role={role} people={people} defaultName={defaultName}
+        <ItemDialog key={selectedItem.id} item={selectedItem} initialMode={selected.mode} initialQty={selected.qty} role={role} people={people} defaultName={defaultName}
           onClose={(text) => { setSelected(null); if (text) say(text); }} />
+      )}
+      {requesting && (
+        <RequestDialog item={requesting} people={people}
+          onDone={(text) => { setRequesting(null); say(text); router.refresh(); }}
+          onClose={() => { setRequesting(null); router.refresh(); }} />
       )}
       {adding && <AddItemDialog categories={categories} onClose={(text) => { setAdding(false); if (text) say(text); }} />}
       {pendingDelete && <ConfirmDelete info={pendingDelete} onConfirm={confirmDelete} onClose={() => setPendingDelete(null)} />}
@@ -483,7 +518,7 @@ function TypeChange({ item, current, onApply, onClose }: { item: Item; current: 
         </label>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
-          <button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button>
+          <button type="button" className="btn" onClick={() => onClose()}>Cancel</button>
           <button className="btn primary">Done</button>
         </div>
       </form>
@@ -504,7 +539,7 @@ function ConfirmDelete({ info, onConfirm, onClose }: { info: PendingDelete; onCo
         </div>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
-          <button type="button" className="btn" onClick={() => ref.current?.close()}>Keep</button>
+          <button type="button" className="btn" onClick={() => onClose()}>Keep</button>
           <button className="btn danger" disabled={busy} onClick={async () => {
             setBusy(true);
             setError("");
@@ -536,17 +571,17 @@ function PickDialog({ items, mode, onPick, onClose }: { items: Item[]; mode: "ou
           ))}
           {!shown.length && <p className="empty">No item found.</p>}
         </div>
-        <div className="actions"><button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button></div>
+        <div className="actions"><button type="button" className="btn" onClick={() => onClose()}>Cancel</button></div>
       </div>
     </dialog>
   );
 }
 
-function ItemDialog({ item, initialMode, role, people, defaultName, onClose }: { item: Item; initialMode: Mode; role: string; people: string[]; defaultName: string; onClose: (text?: string) => void }) {
+function ItemDialog({ item, initialMode, initialQty = "", role, people, defaultName, onClose }: { item: Item; initialMode: Mode; initialQty?: string; role: string; people: string[]; defaultName: string; onClose: (text?: string) => void }) {
   const ref = useModal();
   const router = useRouter();
   const [mode, setMode] = useState<Mode>(initialMode);
-  const [qty, setQty] = useState("");
+  const [qty, setQty] = useState(initialQty);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -617,7 +652,7 @@ function ItemDialog({ item, initialMode, role, people, defaultName, onClose }: {
           )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="actions">
-            <button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button>
+            <button type="button" className="btn" onClick={() => onClose()}>Cancel</button>
             {!blocked && <button className={`btn ${mode === "out" ? "danger" : "primary"}`} disabled={busy}>{busy ? "Saving..." : "Save"}</button>}
           </div>
         </form>
@@ -663,7 +698,7 @@ function AddItemDialog({ categories, onClose }: { categories: string[]; onClose:
         <label>Unit<select name="uom">{UOMS.map((u) => <option key={u}>{u}</option>)}</select></label>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="actions">
-          <button type="button" className="btn" onClick={() => ref.current?.close()}>Cancel</button>
+          <button type="button" className="btn" onClick={() => onClose()}>Cancel</button>
           <button className="btn primary" disabled={busy}>{busy ? "Saving..." : "Add item"}</button>
         </div>
       </form>

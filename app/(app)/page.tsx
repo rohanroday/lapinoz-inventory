@@ -2,6 +2,7 @@ import StockBoard from "@/components/StockBoard";
 import { requirePageUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { todayIST } from "@/lib/day";
+import { listOpenRequests } from "@/lib/requests";
 import { getDayReport, listItems } from "@/lib/stock";
 
 function greeting() {
@@ -13,10 +14,11 @@ export default async function StockPage() {
   const user = await requirePageUser();
   const db = await getDb();
   const today = todayIST();
-  const [items, people, dayReport] = await Promise.all([
+  const [items, people, dayReport, requests] = await Promise.all([
     listItems(),
     db.collection("movements").distinct("personName"),
     user.role === "owner" ? getDayReport(today) : Promise.resolve(null),
+    listOpenRequests(),
   ]);
   return (
     <StockBoard
@@ -28,6 +30,7 @@ export default async function StockPage() {
       userName={user.name}
       dayReport={dayReport}
       today={today}
+      requests={requests}
     />
   );
 }

@@ -4,10 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BellRing, ClipboardList, History, House, LogOut, Pizza } from "lucide-react";
 
-export default function TopBar({ name, role, low }: { name: string; role: string; low: number }) {
+export default function TopBar({ name, role, low, requests }: { name: string; role: string; low: number; requests: number }) {
   const path = usePathname();
   const links = [
-    { href: "/", label: "Home", icon: House },
+    { href: "/", label: "Home", icon: House, badge: requests },
     ...(role === "owner" ? [{ href: "/count", label: "Setup", icon: ClipboardList }] : []),
     { href: "/history", label: "History", icon: History },
     ...(role === "owner" ? [{ href: "/alerts", label: "Low Stock", icon: BellRing, badge: low }] : []),
