@@ -185,7 +185,7 @@ dialog::backdrop { background: rgba(9, 40, 30, .48); }
 .step-info .meta b { color: var(--ink); }
 .meta-low { color: var(--red); font-weight: 600; }
 .row-error { display: block; margin-top: 2px; color: var(--red); font-size: 12px; font-weight: 600; }
-.stepper { flex: none; display: grid; grid-template-columns: 44px minmax(50px, auto) 44px; align-items: center; height: 44px; overflow: hidden; border: 1px solid var(--field); border-radius: 14px; background: #fff; }
+.stepper { flex: none; display: grid; grid-template-columns: 42px minmax(58px, auto) 42px; align-items: center; height: 46px; overflow: hidden; border: 1px solid var(--field); border-radius: 14px; background: #fff; }
 .stepper button { height: 100%; display: grid; place-items: center; border: 0; background: none; color: var(--brand); cursor: pointer; transition: background .12s; touch-action: manipulation; }
 .stepper button:first-child { color: var(--red); }
 .stepper button:hover { background: var(--soft); }
@@ -193,8 +193,10 @@ dialog::backdrop { background: rgba(9, 40, 30, .48); }
 .stepper button:disabled { color: #a9b8b1; background: none; cursor: default; }
 .stepper button:focus-visible { outline-offset: -2px; }
 .stepper .step-value { padding: 0 6px; border-inline: 1px solid var(--line); color: var(--ink); font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.stepper .step-value.plus { color: var(--brand); }
-.stepper .step-value.minus { color: var(--red); }
+.stepper .step-value { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; white-space: nowrap; }
+.stepper .step-value small { margin-top: 1px; font-size: 11px; font-weight: 700; }
+.stepper .step-value.plus { background: var(--brand-soft); color: #075f3e; }
+.stepper .step-value.minus { background: var(--red-soft); color: var(--red); }
 .bar-actions { display: inline-flex; gap: 8px; }
 
 /* Daily usage */

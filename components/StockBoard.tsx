@@ -209,16 +209,17 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
         <button className="step-info" onClick={() => { say(""); setSelected({ id: item.id, mode: change < 0 ? "out" : "in" }); }}>
           <span className="name">{item.name}</span>
           <span className={`meta ${item.low ? "meta-low" : ""}`}>
-            {item.stock === null && !change ? "Not counted" : `${fmt(base / 1000)}`}
-            {change !== 0 && <> → <b>{fmt(result / 1000)}</b></>} {item.uom}
-            {item.low && !change ? " · Low" : ""}
+            {change !== 0
+              ? `Was ${item.stock === null ? "not counted" : `${fmt(base / 1000)} ${item.uom}`}`
+              : item.stock === null ? `Not counted · ${item.uom}` : `${item.uom}${item.low ? " · Low" : ""}`}
           </span>
           {rowErrors[item.id] && <span className="row-error">{rowErrors[item.id]}</span>}
         </button>
         <div className="stepper" role="group" aria-label={`Change ${item.name}`}>
           <button aria-label={`Take out 1 ${item.uom} of ${item.name}`} disabled={result < 1000} onClick={() => stepItem(item, -1)}><Minus size={18} /></button>
-          <button className={`step-value ${change > 0 ? "plus" : change < 0 ? "minus" : ""}`} aria-label={`Type quantity for ${item.name}, current change ${signed(change)}`} onClick={() => setTyping(item)}>
-            {change ? signed(change) : "0"}
+          <button className={`step-value ${change > 0 ? "plus" : change < 0 ? "minus" : ""}`} aria-label={`${item.name}: ${item.stock === null && !change ? "not counted" : `${fmt(result / 1000)} ${item.uom}`}${change ? `, change ${signed(change)}` : ""}. Type a quantity`} onClick={() => setTyping(item)}>
+            <span>{item.stock === null && !change ? "–" : fmt(result / 1000)}</span>
+            {change !== 0 && <small>{signed(change)}</small>}
           </button>
           <button aria-label={`Add 1 ${item.uom} of ${item.name}`} onClick={() => stepItem(item, 1)}><Plus size={18} /></button>
         </div>
@@ -354,7 +355,7 @@ export default function StockBoard({ items, role, people, defaultName, greeting,
               <h2>{prettyCategory(category)}</h2>
             </div>
           )}
-          {category && !selecting && <p className="step-hint">Tap − or + to change stock, or tap the number to type it. Then press Save.</p>}
+          {category && !selecting && <p className="step-hint">The middle number is your stock. Tap − or + to change it, or tap the number to type an amount. Then press Save.</p>}
           {isOwner && (
             <div className="tools">
               {selecting ? (
